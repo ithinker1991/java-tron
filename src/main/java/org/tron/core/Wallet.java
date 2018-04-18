@@ -50,7 +50,9 @@ import org.tron.core.exception.ItemNotFoundException;
 import org.tron.core.exception.ValidateSignatureException;
 import org.tron.core.net.message.TransactionMessage;
 import org.tron.core.net.node.Node;
+import org.tron.protos.Contract;
 import org.tron.protos.Contract.AccountCreateContract;
+import org.tron.protos.Contract.AccountUpdateContract;
 import org.tron.protos.Contract.AssetIssueContract;
 import org.tron.protos.Contract.ParticipateAssetIssueContract;
 import org.tron.protos.Contract.TransferAssetContract;
@@ -246,6 +248,11 @@ public class Wallet {
   }
 
   public Transaction createAccount(AccountCreateContract contract) {
+    AccountStore accountStore = dbManager.getAccountStore();
+    return new TransactionCapsule(contract, accountStore).getInstance();
+  }
+
+  public Transaction createAccount(AccountUpdateContract contract) {
     AccountStore accountStore = dbManager.getAccountStore();
     return new TransactionCapsule(contract, accountStore).getInstance();
   }
