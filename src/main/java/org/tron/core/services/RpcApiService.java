@@ -41,6 +41,7 @@ import org.tron.core.exception.ContractValidateException;
 import org.tron.core.exception.StoreException;
 import org.tron.protos.Contract;
 import org.tron.protos.Contract.AccountCreateContract;
+import org.tron.protos.Contract.AccountUpdateContract;
 import org.tron.protos.Contract.AssetIssueContract;
 import org.tron.protos.Contract.ParticipateAssetIssueContract;
 import org.tron.protos.Contract.TransferAssetContract;
@@ -175,6 +176,7 @@ public class RpcApiService implements Service {
       ByteString addressBs = req.getAddress();
       if (addressBs != null) {
         Account reply = wallet.getBalance(req);
+
         responseObserver.onNext(reply);
       } else {
         responseObserver.onNext(null);
@@ -318,6 +320,19 @@ public class RpcApiService implements Service {
             .onNext(null);
         logger.debug("ContractValidateException", e.getMessage());
       }
+      responseObserver.onCompleted();
+    }
+
+    @Override
+    public void updateAccount(AccountUpdateContract request,
+      StreamObserver<Transaction> responseObserver) {
+
+     if (request.getOwnerAddress() != null) {
+       Transaction trx = wallet.createAccount(request);
+       responseObserver.onNext(trx);
+     } else {
+       responseObserver.onNext(null);
+     }
       responseObserver.onCompleted();
     }
 
