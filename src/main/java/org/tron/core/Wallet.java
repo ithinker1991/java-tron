@@ -33,20 +33,16 @@ import org.tron.common.crypto.Hash;
 import org.tron.common.overlay.message.Message;
 import org.tron.common.utils.Base58;
 import org.tron.common.utils.ByteArray;
-import org.tron.common.utils.Sha256Hash;
 import org.tron.common.utils.Utils;
 import org.tron.core.capsule.AccountCapsule;
 import org.tron.core.capsule.AssetIssueCapsule;
 import org.tron.core.capsule.TransactionCapsule;
 import org.tron.core.capsule.WitnessCapsule;
 import org.tron.core.db.AccountStore;
-import org.tron.core.db.BlockStore;
 import org.tron.core.db.Manager;
-import org.tron.core.db.UtxoStore;
-import org.tron.core.exception.BadItemException;
 import org.tron.core.exception.ContractExeException;
 import org.tron.core.exception.ContractValidateException;
-import org.tron.core.exception.ItemNotFoundException;
+import org.tron.core.exception.StoreException;
 import org.tron.core.exception.ValidateSignatureException;
 import org.tron.core.net.message.TransactionMessage;
 import org.tron.core.net.node.Node;
@@ -62,17 +58,15 @@ import org.tron.protos.Contract.WitnessCreateContract;
 import org.tron.protos.Contract.WitnessUpdateContract;
 import org.tron.protos.Protocol.Account;
 import org.tron.protos.Protocol.Block;
-import org.tron.protos.Protocol.TXOutput;
 import org.tron.protos.Protocol.Transaction;
+
 
 @Slf4j
 public class Wallet {
 
-  private BlockStore db;
   @Getter
   private final ECKey ecKey;
   @Getter
-  private UtxoStore utxoStore;
   private Application app;
   private Node p2pnode;
   private Manager dbManager;
@@ -92,8 +86,6 @@ public class Wallet {
   public Wallet(Application app) {
     this.app = app;
     this.p2pnode = app.getP2pNode();
-    this.db = app.getBlockStoreS();
-    utxoStore = app.getDbManager().getUtxoStore();
     dbManager = app.getDbManager();
     this.ecKey = new ECKey(Utils.getRandom());
   }
@@ -192,14 +184,6 @@ public class Wallet {
     return address;
   }
 
-  /**
-   * Get balance by address.
-   */
-  public long getBalance(byte[] address) {
-    long balance = utxoStore.findUtxo(address).stream().mapToLong(TXOutput::getValue).sum();
-    logger.info("balance = {}", balance);
-    return balance;
-  }
 
   public Account getBalance(Account account) {
     AccountStore accountStore = dbManager.getAccountStore();
@@ -247,6 +231,7 @@ public class Wallet {
     return false;
   }
 
+  @Deprecated
   public Transaction createAccount(AccountCreateContract contract) {
     AccountStore accountStore = dbManager.getAccountStore();
     return new TransactionCapsule(contract, accountStore).getInstance();
@@ -257,10 +242,12 @@ public class Wallet {
     return new TransactionCapsule(contract, accountStore).getInstance();
   }
 
+  @Deprecated
   public Transaction createTransaction(VoteWitnessContract voteWitnessContract) {
     return new TransactionCapsule(voteWitnessContract).getInstance();
   }
 
+  @Deprecated
   public Transaction createTransaction(AssetIssueContract assetIssueContract) {
     return new TransactionCapsule(assetIssueContract).getInstance();
   }
@@ -269,38 +256,24 @@ public class Wallet {
     return new TransactionCapsule(witnessCreateContract).getInstance();
   }
 
+  @Deprecated
   public Transaction createTransaction(WitnessUpdateContract witnessUpdateContract) {
     return new TransactionCapsule(witnessUpdateContract).getInstance();
   }
 
   public Block getNowBlock() {
-    Sha256Hash headBlockId = dbManager.getHeadBlockId();
     try {
-      return dbManager.getBlockById(headBlockId).getInstance();
-    } catch (BadItemException e) {
-      logger.info(e.getMessage());
-      return null;
-    } catch (ItemNotFoundException e) {
+      return dbManager.getHead().getInstance();
+    } catch (StoreException e) {
       logger.info(e.getMessage());
       return null;
     }
   }
 
   public Block getBlockByNum(long blockNum) {
-    Sha256Hash headBlockId = null;
     try {
-      headBlockId = dbManager.getBlockIdByNum(blockNum);
-    } catch (BadItemException e) {
-      logger.info(e.getMessage());
-    } catch (ItemNotFoundException e) {
-      logger.info(e.getMessage());
-    }
-    try {
-      return dbManager.getBlockById(headBlockId).getInstance();
-    } catch (BadItemException e) {
-      logger.info(e.getMessage());
-      return null;
-    } catch (ItemNotFoundException e) {
+      return dbManager.getBlockByNum(blockNum).getInstance();
+    } catch (StoreException e) {
       logger.info(e.getMessage());
       return null;
     }

@@ -6,8 +6,8 @@ import static org.tron.protos.Protocol.Transaction.Contract.ContractType.Transfe
 import static org.tron.protos.Protocol.Transaction.Contract.ContractType.TransferContract;
 
 import com.carrotsearch.sizeof.RamUsageEstimator;
+import com.google.common.collect.Lists;
 import com.google.protobuf.ByteString;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -19,12 +19,10 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.lang3.ArrayUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.tron.common.crypto.ECKey;
 import org.tron.common.overlay.discover.Node;
-import org.tron.common.utils.ByteArray;
 import org.tron.common.utils.DialogOptional;
 import org.tron.common.utils.Sha256Hash;
 import org.tron.common.utils.StringUtil;
@@ -34,7 +32,6 @@ import org.tron.core.actuator.ActuatorFactory;
 import org.tron.core.capsule.AccountCapsule;
 import org.tron.core.capsule.BlockCapsule;
 import org.tron.core.capsule.BlockCapsule.BlockId;
-import org.tron.core.capsule.BytesCapsule;
 import org.tron.core.capsule.TransactionCapsule;
 import org.tron.core.capsule.TransactionResultCapsule;
 import org.tron.core.capsule.WitnessCapsule;
@@ -85,6 +82,7 @@ public class Manager {
 
   private KhaosDatabase khaosDb;
   private RevokingDatabase revokingStore;
+
   @Getter
   private DialogOptional dialog = DialogOptional.instance();
 
@@ -138,7 +136,8 @@ public class Manager {
   private List<TransactionCapsule> pendingTransactions;
 
   // transactions popped
-  private List<TransactionCapsule> popedTransactions = new ArrayList<>();
+  private List<TransactionCapsule> popedTransactions = Collections
+      .synchronizedList(Lists.newArrayList());
 
 
   //for test only
@@ -210,6 +209,7 @@ public class Manager {
     return this.peersStore.get("neighbours".getBytes());
   }
 
+  // fot test only
   public void destory() {
     AccountStore.destroy();
     TransactionStore.destroy();
@@ -238,7 +238,7 @@ public class Manager {
     this.setWitnessController(WitnessController.createInstance(this));
     this.setBlockIndexStore(BlockIndexStore.create("block-index"));
     this.khaosDb = new KhaosDatabase("block" + "_KDB");
-    this.pendingTransactions = new ArrayList<>();
+    this.pendingTransactions = Collections.synchronizedList(Lists.newArrayList());
     this.initGenesis();
     try {
       this.khaosDb.start(getBlockById(getDynamicPropertiesStore().getLatestBlockHeaderHash()));
@@ -285,8 +285,7 @@ public class Manager {
         Args.getInstance().setChainId(this.genesisBlock.getBlockId().toString());
         //this.pushBlock(this.genesisBlock);
         blockStore.put(this.genesisBlock.getBlockId().getBytes(), this.genesisBlock);
-        this.blockIndexStore.put(ByteArray.fromLong(this.genesisBlock.getNum()),
-            new BytesCapsule(this.genesisBlock.getBlockId().getBytes()));
+        this.blockIndexStore.put(this.genesisBlock.getBlockId());
 
         logger.info("save block: " + this.genesisBlock);
         // init DynamicPropertiesStore
@@ -387,7 +386,6 @@ public class Manager {
         RevokingStore.Dialog tmpDialog = revokingStore.buildDialog()) {
       processTransaction(trx);
       pendingTransactions.add(trx);
-
       tmpDialog.merge();
     } catch (RevokingStoreIllegalStateException e) {
       logger.debug(e.getMessage(), e);
@@ -395,7 +393,7 @@ public class Manager {
     return true;
   }
 
-  void validateFreq(TransactionCapsule trx) throws HighFreqException {
+  private void validateFreq(TransactionCapsule trx) throws HighFreqException {
     List<org.tron.protos.Protocol.Transaction.Contract> contracts = trx.getInstance().getRawData()
         .getContractList();
     for (Transaction.Contract contract : contracts) {
@@ -403,18 +401,18 @@ public class Manager {
           || contract.getType() == TransferAssetContract) {
         byte[] address = TransactionCapsule.getOwner(contract);
         AccountCapsule accountCapsule = this.getAccountStore().get(address);
-        long balacne = accountCapsule.getBalance();
+        long balance = accountCapsule.getBalance();
         long latestOperationTime = accountCapsule.getLatestOperationTime();
         if (latestOperationTime != 0) {
-          doValidateFreq(balacne, 0, latestOperationTime);
-        } else {
-          accountCapsule.setLatestOperationTime(Time.getCurrentMillis());
+          doValidateFreq(balance, 0, latestOperationTime);
         }
+        accountCapsule.setLatestOperationTime(Time.getCurrentMillis());
+        this.getAccountStore().put(accountCapsule.createDbKey(), accountCapsule);
       }
     }
   }
 
-  void doValidateFreq(long balance, int transNumber, long latestOperationTime)
+  private void doValidateFreq(long balance, int transNumber, long latestOperationTime)
       throws HighFreqException {
     long now = Time.getCurrentMillis();
     // todo: avoid ddos, design more smoothly formula later.
@@ -446,9 +444,7 @@ public class Manager {
       throws ContractValidateException, ContractExeException, ValidateSignatureException {
     processBlock(block);
     this.blockStore.put(block.getBlockId().getBytes(), block);
-    this.blockIndexStore
-        .put(ByteArray.fromLong(block.getNum()),
-            new BytesCapsule(block.getBlockId().getBytes()));
+    this.blockIndexStore.put(block.getBlockId());
   }
 
   private void switchFork(BlockCapsule newHead) {
@@ -527,6 +523,7 @@ public class Manager {
       }
 
       BlockCapsule newBlock = this.khaosDb.push(block);
+
       //DB don't need lower block
       if (getDynamicPropertiesStore().getLatestBlockHeaderHash() == null) {
         if (newBlock.getNum() != 0) {
@@ -622,9 +619,12 @@ public class Manager {
         this.khaosDb.getBranch(
             getDynamicPropertiesStore().getLatestBlockHeaderHash(),
             forkBlockHash);
-    return branch.getValue().stream()
+
+    LinkedList<BlockId> result = branch.getValue().stream()
         .map(blockCapsule -> blockCapsule.getBlockId())
         .collect(Collectors.toCollection(LinkedList::new));
+    result.add(branch.getValue().peekLast().getParentBlockId());
+    return result;
   }
 
   /**
@@ -702,7 +702,6 @@ public class Manager {
     TransactionResultCapsule ret = new TransactionResultCapsule();
 
     for (Actuator act : actuatorList) {
-
       act.validate();
       act.execute(ret);
       trxCap.setResult(ret);
@@ -715,23 +714,13 @@ public class Manager {
    * Get the block id from the number.
    */
   public BlockId getBlockIdByNum(final long num)
-      throws BadItemException, ItemNotFoundException {
-    final byte[] hash = this.blockIndexStore.get(ByteArray.fromLong(num)).getData();
-    return ArrayUtils.isEmpty(hash)
-        ? this.genesisBlock.getBlockId()
-        : new BlockId(Sha256Hash.wrap(hash), num);
+      throws ItemNotFoundException {
+    return this.blockIndexStore.get(num);
   }
 
-  /**
-   * Get number of block by the block id.
-   */
-  public long getBlockNumById(final Sha256Hash hash)
-      throws BadItemException, ItemNotFoundException {
-
-    if (this.khaosDb.containBlock(hash)) {
-      return this.khaosDb.getBlock(hash).getNum();
-    }
-    return blockStore.get(hash.getBytes()).getNum();
+  public BlockCapsule getBlockByNum(final long num)
+      throws ItemNotFoundException, BadItemException {
+    return getBlockById(getBlockIdByNum(num));
   }
 
   /**
@@ -880,7 +869,8 @@ public class Manager {
 
   public long getSyncBeginNumber() {
     logger.info("headNumber:" + dynamicPropertiesStore.getLatestBlockHeaderNumber());
-    logger.info("syncBeginNumber:" + (dynamicPropertiesStore.getLatestBlockHeaderNumber() - revokingStore.size()));
+    logger.info("syncBeginNumber:"
+        + (dynamicPropertiesStore.getLatestBlockHeaderNumber() - revokingStore.size()));
     logger.info("solidBlockNumber:" + dynamicPropertiesStore.getLatestSolidifiedBlockNum());
     return dynamicPropertiesStore.getLatestBlockHeaderNumber() - revokingStore.size();
   }
@@ -889,7 +879,7 @@ public class Manager {
    * Determine if the current time is maintenance time.
    */
   public boolean needMaintenance(long blockTime) {
-    return this.dynamicPropertiesStore.getNextMaintenanceTime().getMillis() <= blockTime;
+    return this.dynamicPropertiesStore.getNextMaintenanceTime() <= blockTime;
   }
 
   /**
@@ -968,4 +958,30 @@ public class Manager {
   public void setBlockIndexStore(BlockIndexStore indexStore) {
     this.blockIndexStore = indexStore;
   }
+
+  public void closeAllStore() {
+    System.err.println("******** begin to close db ********");
+    closeOneStore(accountStore);
+    closeOneStore(blockStore);
+    closeOneStore(blockIndexStore);
+    closeOneStore(witnessStore);
+    closeOneStore(witnessScheduleStore);
+    closeOneStore(assetIssueStore);
+    closeOneStore(dynamicPropertiesStore);
+    closeOneStore(transactionStore);
+    closeOneStore(utxoStore);
+    System.err.println("******** end to close db ********");
+  }
+
+  private void closeOneStore(TronDatabase database) {
+    System.err.println("******** begin to close " + database.getName() + " ********");
+    try {
+      database.close();
+    } catch (Exception e) {
+      System.err.println("faild to close  " + database.getName() + ". " + e);
+    } finally {
+      System.err.println("******** end to close " + database.getName() + " ********");
+    }
+  }
+
 }

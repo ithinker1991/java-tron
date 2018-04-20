@@ -42,6 +42,7 @@ import org.tron.core.config.Parameter.NetConstants;
 import org.tron.core.config.Parameter.NodeConstant;
 import org.tron.core.exception.BadBlockException;
 import org.tron.core.exception.BadTransactionException;
+import org.tron.core.exception.StoreException;
 import org.tron.core.exception.TraitorPeerException;
 import org.tron.core.exception.TronException;
 import org.tron.core.exception.UnLinkedBlockException;
@@ -260,17 +261,7 @@ public class NodeImpl extends PeerConnectionDelegate implements Node {
 
   @Override
   public void close() throws InterruptedException {
-    loopFetchBlocks.join();
-    loopSyncBlockChain.join();
-    loopAdvertiseInv.join();
-    isAdvertiseActive = false;
-    isFetchActive = true;
-    advertiseLoopThread.join();
-    advObjFetchLoopThread.join();
-    handleSyncBlockLoop.join();
-    disconnectInactiveExecutor.shutdown();
-    cleanInventoryExecutor.shutdown();
-    fetchSyncBlocksExecutor.shutdown();
+    getActivePeer().forEach(peer -> disconnectPeer(peer, ReasonCode.USER_REASON));
   }
 
   private void activeTronPump() {
@@ -667,6 +658,8 @@ public class NodeImpl extends PeerConnectionDelegate implements Node {
       freshBlockId.offer(block.getBlockId());
       isAccept = true;
     } catch (BadBlockException e) {
+      logger.error("We get a bad block, reason is " + e.getMessage()
+          + "\n the block is" + block);
       badAdvObj.put(block.getBlockId(), System.currentTimeMillis());
       reason = ReasonCode.REQUESTED;
     } catch (UnLinkedBlockException e) {
@@ -734,11 +727,15 @@ public class NodeImpl extends PeerConnectionDelegate implements Node {
   private void onHandleSyncBlockChainMessage(PeerConnection peer, SyncBlockChainMessage syncMsg) {
     //logger.info("on handle sync block chain message");
     peer.setTronState(TronState.SYNCING);
-    LinkedList<BlockId> blockIds;
+    LinkedList<BlockId> blockIds = new LinkedList<>();
     List<BlockId> summaryChainIds = syncMsg.getBlockIds();
     long remainNum = 0;
 
-    blockIds = del.getLostBlockIds(summaryChainIds);
+    try {
+      blockIds = del.getLostBlockIds(summaryChainIds);
+    } catch (StoreException e) {
+      logger.error(e.getMessage());
+    }
 
     if (blockIds.isEmpty()) {
       peer.setNeedSyncFromUs(false);
