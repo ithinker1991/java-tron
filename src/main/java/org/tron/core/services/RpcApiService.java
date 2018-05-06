@@ -337,6 +337,19 @@ public class RpcApiService implements Service {
     }
 
     @Override
+    public void updateAccount(AccountUpdateContract request,
+      StreamObserver<Transaction> responseObserver) {
+
+     if (request.getOwnerAddress() != null) {
+       Transaction trx = wallet.createAccount(request);
+       responseObserver.onNext(trx);
+     } else {
+       responseObserver.onNext(null);
+     }
+      responseObserver.onCompleted();
+    }
+
+    @Override
     public void getNowBlock(EmptyMessage request, StreamObserver<Block> responseObserver) {
       responseObserver.onNext(wallet.getNowBlock());
       responseObserver.onCompleted();
